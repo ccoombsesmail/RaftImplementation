@@ -92,21 +92,18 @@ type LogEntry struct {
 func (rf *Raft) BeginElection() {
 	
 	// DPrintf("[%v] is in state %v and voted for %v", rf.me, rf.state, rf.votedFor)
+	rf.mu.Lock()
 	rf.timeout = resetTimer()
 	if (rf.votedFor != -1) {
 		rf.votedFor = -1
+		rf.mu.Unlock()
 		return
 	}
-	rf.mu.Lock()
+
 	rf.currentTerm++
 	rf.state = Candidate
 	rf.votedFor = rf.me
 	rf.timeout = resetTimer()
-	reqVoteArgs := &RequestVoteArgs{
-		Term: rf.currentTerm,
-		CandidateId: rf.me}
-
-	reqReplyArgs := &RequestVoteReply{}
 	votes := 1
 	term := rf.currentTerm
 	rf.mu.Unlock()
@@ -118,28 +115,31 @@ func (rf *Raft) BeginElection() {
 			continue
 		}
 		
-		go func(server int) {
+		go func(server int, term int) {
 			// DPrintf("%v about to send request vote", rf.me)
+			reqVoteArgs := &RequestVoteArgs{
+				Term: term,
+				CandidateId: rf.me}
+			reqReplyArgs := &RequestVoteReply{}
 			voteGranted := rf.sendRequestVote(server, reqVoteArgs, reqReplyArgs)
 
 			rf.mu.Lock()
 			if (rf.currentTerm < reqReplyArgs.CurrentTerm){
 				rf.currentTerm = reqReplyArgs.CurrentTerm
 			}
-			rf.mu.Unlock()
 			if (!voteGranted) {
 				rf.timeout = resetTimer()
+				rf.mu.Unlock()
 				return
 			}
 
-			rf.mu.Lock()
 			votes++
 			currVotes := votes
 			// DPrintf("[%v] has %v votes", rf.me, votes )
 			rf.mu.Unlock()
 			if (currVotes > len(rf.peers)/2) {
+				
 				rf.mu.Lock()
-
 				if rf.currentTerm != term {
 					rf.mu.Unlock()
 					return
@@ -151,7 +151,7 @@ func (rf *Raft) BeginElection() {
 				rf.SendHeartBeats()
 			}
 
-		}(server)
+		}(server, term)
 
 	}
 }
@@ -159,11 +159,8 @@ func (rf *Raft) BeginElection() {
 // SendHeartBeats ...
 func (rf *Raft) SendHeartBeats() { 
 	rf.mu.Lock()
-	appendArgs := &AppendEntriesArgs{
-		Term: rf.currentTerm,
-	}
+	term := rf.currentTerm
 	rf.mu.Unlock()
-	appendReplyArgs := &AppendEntriesReply{}
 	for {
 		rf.mu.Lock()
 		rf.timeout = resetTimer()
@@ -172,19 +169,23 @@ func (rf *Raft) SendHeartBeats() {
 			if (server == rf.me) {
 				continue
 			}
-			go func(server int) {				
+			go func(server int, term int) {				
 				// DPrintf("[%v] is sending hearbeat to %v", rf.me, server)
-				term, ok := rf.sendAppendEntries(server, appendArgs, appendReplyArgs)
-				if (!ok) {
-					// DPrintf("[%v] result of hearbeat", ok)
-					rf.mu.Lock()
-					rf.currentTerm = term
-					rf.state = Follower
-					rf.timeout = resetTimer()
-					rf.mu.Unlock()
-					return
+				appendArgs := &AppendEntriesArgs{
+					Term: term,
 				}
-			}(server)
+				appendReplyArgs := &AppendEntriesReply{}
+				 rf.sendAppendEntries(server, appendArgs, appendReplyArgs)
+				// if (!ok) {
+				// 	// DPrintf("[%v] result of hearbeat", ok)
+				// 	rf.mu.Lock()
+				// 	rf.currentTerm = term
+				// 	rf.state = Follower
+				// 	rf.timeout = resetTimer()
+				// 	rf.mu.Unlock()
+				// 	return
+				// }
+			}(server, term)
 		}
 		// rf.mu.Lock()
 		// if (rf.state != Leader) {
@@ -268,7 +269,7 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// DPrintf("[%v] with current term %v attempting to vote for %v on term %v", rf.currentTerm, rf.me, args.CandidateId, args.Term)
-	if (args.Term > rf.currentTerm && rf.votedFor == -1) {
+	if (args.Term > rf.currentTerm) {
 		// DPrintf("[%v] voted for %v on term %v", rf.me, args.CandidateId, args.Term)
 		rf.timeout = resetTimer()
 		rf.state = Follower
