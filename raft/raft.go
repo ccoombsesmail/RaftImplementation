@@ -75,10 +75,6 @@ type Raft struct {
 	nextIndex []int
 	matchIndex []int
 
-	// Your data here (2A, 2B, 2C).
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
-
 }
 
 // LogEntry ...
