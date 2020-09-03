@@ -139,7 +139,9 @@ func (rf *Raft) BeginElection() {
 			rf.mu.Unlock()
 			if (currVotes > len(rf.peers)/2) {
 				rf.mu.Lock()
+
 				if rf.currentTerm != term {
+					rf.mu.Unlock()
 					return
 				}
 				rf.state = Leader
@@ -172,19 +174,22 @@ func (rf *Raft) SendHeartBeats() {
 			}
 			go func(server int) {				
 				// DPrintf("[%v] is sending hearbeat to %v", rf.me, server)
-				_, ok := rf.sendAppendEntries(server, appendArgs, appendReplyArgs)
+				term, ok := rf.sendAppendEntries(server, appendArgs, appendReplyArgs)
 				if (!ok) {
 					// DPrintf("[%v] result of hearbeat", ok)
-					// rf.currentTerm = term
+					rf.mu.Lock()
+					rf.currentTerm = term
 					rf.state = Follower
 					rf.timeout = resetTimer()
+					rf.mu.Unlock()
 					return
 				}
 			}(server)
 		}
-		if (rf.state != Leader) {
-			break
-		}
+		// rf.mu.Lock()
+		// if (rf.state != Leader) {
+		// 	break
+		// }
 		time.Sleep(250 * time.Millisecond)
 	}
 }
@@ -193,11 +198,11 @@ func (rf *Raft) SendHeartBeats() {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-	// rf.mu.Lock()
-	// defer rf.mu.Unlock()
+
 	var term int
 	var isleader bool
-	// Your code here (2A).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	term = rf.currentTerm
 	isleader = rf.state == Leader
 	return term, isleader
@@ -264,7 +269,7 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 	defer rf.mu.Unlock()
 	// DPrintf("[%v] with current term %v attempting to vote for %v on term %v", rf.currentTerm, rf.me, args.CandidateId, args.Term)
 	if (args.Term > rf.currentTerm && rf.votedFor == -1) {
-		DPrintf("[%v] voted for %v on term %v", rf.me, args.CandidateId, args.Term)
+		// DPrintf("[%v] voted for %v on term %v", rf.me, args.CandidateId, args.Term)
 		rf.timeout = resetTimer()
 		rf.state = Follower
 		rf.currentTerm = args.Term
@@ -280,7 +285,8 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	
-	DPrintf("[%v] is sending request vote to %v", rf.me, server)
+	// DPrintf("[%v] is sending request vote to %v", rf.me, server)
+	
 	peer := rf.peers[server]
 	ok := peer.Call("Raft.HandleRequestVote", args, reply)
 	return ok && reply.VoteGranted
@@ -380,12 +386,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	go func() { 
 		for {	
-			// rf.mu.Lock()
+			rf.mu.Lock()
 			endTimeInt := rf.timeout
-			// rf.mu.Unlock()
 			if (time.Now().After(endTimeInt)) {
+				rf.mu.Unlock()
 				rf.BeginElection()
+				continue
 			}
+			rf.mu.Unlock()
 		}
 		time.Sleep(50 * time.Millisecond)
 	}()
