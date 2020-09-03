@@ -183,7 +183,6 @@ func (rf *Raft) SendHeartBeats() {
 			}(server)
 		}
 		if (rf.state != Leader) {
-			DPrintf("should break out")
 			break
 		}
 		time.Sleep(250 * time.Millisecond)
@@ -200,9 +199,7 @@ func (rf *Raft) GetState() (int, bool) {
 	var isleader bool
 	// Your code here (2A).
 	term = rf.currentTerm
-	// rf.mu.Lock()
 	isleader = rf.state == Leader
-	// rf.mu.Unlock()
 	return term, isleader
 }
 
@@ -248,31 +245,20 @@ func (rf *Raft) readPersist(data []byte) {
 
 
 
-//
-// example RequestVote RPC arguments structure.
-// field names must start with capital letters!
-//
+
 type RequestVoteArgs struct {
-	// Your data here (2A, 2B).
 	Term int
 	CandidateId int
 }
 
-//
-// example RequestVote RPC reply structure.
-// field names must start with capital letters!
-//
+
 type RequestVoteReply struct {
-	// Your data here (2A).
 	CurrentTerm int
 	VoteGranted bool
 }
 
-//
-// example RequestVote RPC handler.
-//
+
 func (rf *Raft) HandleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (2A, 2B).
 	
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -379,6 +365,8 @@ func (rf *Raft) killed() bool {
 
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
+		// Your initialization code here (2A, 2B, 2C).
+
 	rf := &Raft{}
 	rf.mu.Lock()
 	rf.votedFor = -1
@@ -389,14 +377,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.timeout = resetTimer()
 	rf.state = Follower
 	rf.mu.Unlock()
-	// Your initialization code here (2A, 2B, 2C).
 
 	go func() { 
 		for {	
 			// rf.mu.Lock()
 			endTimeInt := rf.timeout
 			// rf.mu.Unlock()
-			// DPrintf("%v", time.Now().UnixNano()/10000 >  endTimeInt)
 			if (time.Now().After(endTimeInt)) {
 				rf.BeginElection()
 			}
@@ -409,10 +395,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 
-
+// Create random timeout period
 func resetTimer() time.Time {
 	return time.Now().Add(time.Duration(int64(rand.Intn(300) + 300)) * time.Millisecond)
 }
 
 
-// time.Since(startTime).Milliseconds() 
