@@ -67,7 +67,7 @@ type Raft struct {
 	state ServerState
 	timeout time.Time
 
-
+	applyCh chan ApplyMsg
 
 	commitIndex int
 	lastApplied int
@@ -116,7 +116,6 @@ func (rf *Raft) BeginElection() {
 		}
 		
 		go func(server int, term int, lastLogIndex int, lastLogTerm int) {
-			// DPrintf("%v about to send request vote", rf.me)
 			reqVoteArgs := &RequestVoteArgs{
 				Term: term,
 				CandidateId: rf.me,
@@ -130,7 +129,7 @@ func (rf *Raft) BeginElection() {
 			if (rf.currentTerm < reqReplyArgs.CurrentTerm){
 				rf.currentTerm = reqReplyArgs.CurrentTerm
 			}
-			if (!voteGranted) {
+			if (!voteGranted || votes > len(rf.peers)/2 ) {
 				rf.timeout = resetTimer()
 				rf.mu.Unlock()
 				return
@@ -138,7 +137,6 @@ func (rf *Raft) BeginElection() {
 
 			votes++
 			currVotes := votes
-			// DPrintf("[%v] has %v votes", rf.me, votes )
 			rf.mu.Unlock()
 			if (currVotes > len(rf.peers)/2) {
 				
@@ -172,24 +170,31 @@ func (rf *Raft) SendHeartBeats() {
 			if (server == rf.me) {
 				continue
 			}
-			go func(server int, term int) {				
-				// DPrintf("[%v] is sending hearbeat to %v", rf.me, server)
-				appendArgs := &AppendEntriesArgs{
+			go func(server int, term int) {	
+					rf.mu.Lock()	
+					appendArgs := &AppendEntriesArgs{
 					Term: term,
-				}
+					LeaderID: rf.me,
+					PrevLogIndex: len(rf.log) - 1,
+					PrevLogTerm: rf.log[len(rf.log) - 1].Term,
+					LeaderCommit: rf.commitIndex,
+						Entries: []LogEntry{},
+				}	
+				rf.mu.Unlock()	
+
 				appendReplyArgs := &AppendEntriesReply{}
-				 rf.sendAppendEntries(server, appendArgs, appendReplyArgs)
-				// if (!ok) {
-				// 	// DPrintf("[%v] result of hearbeat", ok)
-				// 	rf.mu.Lock()
-				// 	rf.currentTerm = term
-				// 	rf.state = Follower
-				// 	rf.timeout = resetTimer()
-				// 	rf.mu.Unlock()
-				// 	return
-				// }
+				rf.sendAppendEntries(server, appendArgs, appendReplyArgs)
+				if (appendReplyArgs.Term > term) {
+					rf.mu.Lock()
+					rf.currentTerm = term
+					rf.state = Follower
+					rf.timeout = resetTimer()
+					rf.mu.Unlock()
+					return
+				}
 			}(server, term)
 		}
+
 		rf.mu.Lock()
 		if (rf.state != Leader) {
 			rf.mu.Unlock()
@@ -197,12 +202,12 @@ func (rf *Raft) SendHeartBeats() {
 		}
 		rf.mu.Unlock()
 
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 
 
-// return currentTerm and whether this server
+// GetState returns currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 
@@ -281,7 +286,7 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 	// current server last log idx and last log term
 	csLastLogIndex := len(rf.log) - 1
 	csLastLogTerm := rf.log[csLastLogIndex].Term
-	
+
 	// DPrintf("[%v] with current term %v attempting to vote for %v on term %v", rf.currentTerm, rf.me, args.CandidateId, args.Term)
 	if (args.Term >= rf.currentTerm ) {
 		// DPrintf("[%v] voted for %v on term %v", rf.me, args.CandidateId, args.Term)
@@ -330,15 +335,42 @@ type AppendEntriesReply struct {
 func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	// if (len(args.Entries) != 0) {
+	// 	DPrintf("incoming append entry from [%v] %v (before append RPC)", args.LeaderID, args.Entries)
+	// 	DPrintf("[%v] log is %v (before append RPC)", rf.me, rf.log)
+	// }
 	if (args.Term < rf.currentTerm) {
 		reply.Term = rf.currentTerm
 		reply.Success = false
 	} else {
-		rf.currentTerm = args.Term
+		rf.applyCommand(args.LeaderCommit, args.PrevLogIndex)
 		reply.Success = true
+		rf.currentTerm = args.Term
 		rf.state = Follower
 		rf.votedFor = -1
 		rf.timeout = resetTimer()
+		if (len(args.Entries) != 0) {
+			rf.log = append(rf.log, args.Entries...)
+		}
+	}
+	if (len(args.Entries) != 0) {
+		DPrintf("[%v] log length is now %v (after append RPC)", rf.me, len(rf.log))
+		// DPrintf("[%v] log is now %v (after append RPC)", rf.me, rf.log)
+	}
+}
+
+func (rf *Raft) applyCommand(leaderCommitIdx int, leaderPrevLogIndex int) {
+	DPrintf("[%v] commitIndex is %v and log length is %v", rf.me, rf.commitIndex, len(rf.log))
+
+	if (leaderCommitIdx > rf.commitIndex && leaderCommitIdx < len(rf.log)) {
+		DPrintf("[%v] is about to apply at at index %v", rf.me, leaderCommitIdx)
+		rf.commitIndex = leaderCommitIdx
+		applyMsg := ApplyMsg{
+			CommandValid: true,
+			CommandIndex: rf.commitIndex,
+		}
+		applyMsg.Command = rf.log[leaderCommitIdx].Command
+		rf.applyCh <- applyMsg
 	}
 
 }
@@ -346,11 +378,34 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs, reply *AppendEntrie
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) (int, bool) {
 	ok := rf.peers[server].Call("Raft.HandleAppendEntries", args, reply)
-	return reply.Term, ok
+	return reply.Term, ok && reply.Success
 }
 
-//
-// the service using Raft (e.g. a k/v server) wants to start
+
+
+
+func (rf *Raft) HandleCommit(args *ApplyMsg, reply *ApplyMsg) {
+	// DPrintf("[%v] is about to apply message", rf.me)
+	// rf.mu.Lock()
+	DPrintf("[%v] is about to apply message with command %v", rf.me, rf.log[len(rf.log) - 1].Command)
+	args.Command = rf.log[len(rf.log) - 1].Command
+	// rf.mu.Unlock()
+	rf.commitIndex++
+	rf.applyCh <- *args
+}
+
+func (rf *Raft) SendCommitConfirmations(args *ApplyMsg, reply *ApplyMsg)  {
+
+	for server := range rf.peers {
+		if server == rf.me {
+			continue
+		}
+		rf.peers[server].Call("Raft.HandleCommit", args, reply)
+	}
+	
+}
+
+// Start ... the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
 // server isn't the leader, returns false. otherwise start the
 // agreement and return immediately. there is no guarantee that this
@@ -362,13 +417,74 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // if it's ever committed. the second return value is the current
 // term. the third return value is true if this server believes it is
 // the leader.
-//
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	rf.mu.Lock()
 	index := -1
 	term := rf.currentTerm
-	isLeader := true
+	isLeader := rf.state == Leader
+	if (isLeader) {
+		index = len(rf.log)
+	}
+	lastLogIndex := len(rf.log) - 1
+	lastLogTerm := rf.log[lastLogIndex].Term
+	commitIndex := rf.commitIndex
+	successes := 0
+	rf.mu.Unlock()
 
-	// Your code here (2B).
+	if (isLeader) {
+		rf.mu.Lock()
+		successes++
+		logEntry := LogEntry{
+			Term: term,
+			Command: command,
+		}
+		rf.log = append(rf.log, logEntry)
+		rf.mu.Unlock()
+
+		for server := range rf.peers {
+			if (server == rf.me) {
+				continue
+			}
+			go func(server int, lastLogIndex int, lastLogTerm int, commitIndex int, logEntry LogEntry) {
+				appendArgs := &AppendEntriesArgs{
+					Term: term,
+					LeaderID: rf.me,
+					PrevLogIndex: lastLogIndex,
+					PrevLogTerm: lastLogTerm,
+					LeaderCommit: commitIndex,
+					Entries: []LogEntry{logEntry},
+				}
+				appendReplyArgs := &AppendEntriesReply{}
+				DPrintf("[%v] is sending log entries %v ", rf.me, appendArgs.Entries)
+
+				_, ok := rf.sendAppendEntries(server, appendArgs, appendReplyArgs)
+				rf.mu.Lock()
+				if (!ok || successes > len(rf.peers)/2) {
+					rf.mu.Unlock()
+					return					
+				}
+				successes++
+
+				if (successes > len(rf.peers)/2) {
+					rf.commitIndex++
+					applyMsg := ApplyMsg{
+						CommandValid: true,
+						Command: command,
+						CommandIndex: rf.commitIndex,
+					}
+					rf.applyCh <- applyMsg
+					DPrintf("[%v] has %v successes", rf.me, successes)
+					// applyMsgFollowers := ApplyMsg{
+					// 	CommandValid: true,
+					// 	CommandIndex: rf.commitIndex,
+					// }
+					// rf.SendCommitConfirmations(&applyMsgFollowers, &applyMsgFollowers)
+				}
+				rf.mu.Unlock()
+
+			}(server, lastLogIndex, lastLogTerm, commitIndex, logEntry)
+		}
+	}
 
 	return index, term, isLeader
 }
@@ -392,6 +508,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf := &Raft{}
 	rf.mu.Lock()
+	rf.applyCh = applyCh
 	rf.votedFor = -1
 	rf.peers = peers
 	rf.persister = persister
