@@ -164,7 +164,7 @@ func (rf *Raft) BeginElection() {
 				}
 
 				rf.state = Leader
-				DPrintf("[%v] has been elected on term %v", rf.me, term)
+				// DPrintf("[%v] has been elected on term %v", rf.me, term)
 				rf.mu.Unlock()
 				rf.SendHeartBeats()
 			}
@@ -287,14 +287,13 @@ func (rf *Raft) SendAppendRPC(server int, term int) {
 		}
 
 	} else {
-		if (prevLogIndex > -1 && len(entries) != 0) {
+		if (prevLogIndex > -1 && len(entries) != -4) {
 			if (appendReplyArgs.XTerm == -1) {
 				rf.nextIndex[server] = appendReplyArgs.XIndex
 			} else {
 				firstOccurenceOfXTerm := rf.FindFirstIndexOfTerm(appendReplyArgs.XTerm)
 				if (firstOccurenceOfXTerm == -1) {
 					rf.nextIndex[server] = appendReplyArgs.XIndex
-					DPrintf(" nextIndex is now %v", rf.nextIndex)
 				} else {
 					rf.nextIndex[server] = firstOccurenceOfXTerm + 1
 				}
@@ -391,10 +390,10 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 	}
 
 	if (args.Term >= rf.currentTerm) {
-		DPrintf("incoming args.LastLogTerm from [%v] is %v and %v last term is %v", args.CandidateId,args.LastLogTerm, rf.me, csLastLogTerm)
+		// DPrintf("incoming args.LastLogTerm from [%v] is %v and %v last term is %v", args.CandidateId,args.LastLogTerm, rf.me, csLastLogTerm)
 		if ((args.LastLogIndex == -1 && csLastLogIndex == -1) ||
 		args.LastLogTerm > csLastLogTerm || (args.LastLogTerm == csLastLogTerm && args.LastLogIndex >= csLastLogIndex)) {
-			DPrintf("[%v] voted for %v on term %v", rf.me, args.CandidateId, args.Term)
+			// DPrintf("[%v] voted for %v on term %v", rf.me, args.CandidateId, args.Term)
 			rf.turnToFollower(args.Term)
 			rf.votedFor = args.CandidateId
 			reply.VoteGranted = true
@@ -485,7 +484,6 @@ func (rf *Raft) applyCommand(leaderCommitIdx int, leaderPrevLogIndex int, entrie
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.HandleAppendEntries", args, reply)
-	// return reply.Term, ok && reply.Success
 	return ok
 }
 
@@ -564,7 +562,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			}
 			rf.mu.Unlock()
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(30 * time.Millisecond)
 	}()
 
 	// initialize from state persisted before a crash
