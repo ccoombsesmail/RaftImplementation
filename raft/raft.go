@@ -20,7 +20,6 @@ package raft
 import "sync"
 import "sync/atomic"
 import "dslabs/mit-go/src/labrpc"
-// import "math"
 import "time"
 import "bytes"
 import "dslabs/mit-go/src/labgob"
@@ -91,7 +90,7 @@ type LogEntry struct {
 func (rf *Raft) BeginElection() {
 
 	rf.mu.Lock()
-	// DPrintf("[%v] is starting and election", rf.me)
+	// DPrintf("[%v] is starting an election", rf.me)
 	rf.timeout = resetTimer()
 	if (rf.killed() || rf.votedFor != -1 ) {
 		rf.votedFor = -1
@@ -99,14 +98,6 @@ func (rf *Raft) BeginElection() {
 		rf.mu.Unlock()
 		return
 	}
-
-
-	// if (rf.votedFor != -1) {
-	// 	rf.votedFor = -1
-	// 	rf.persist()
-	// 	rf.mu.Unlock()
-	// 	return
-	// }
 
 	rf.currentTerm++
 	rf.state = Candidate
@@ -240,7 +231,6 @@ func (rf *Raft) SendAppendRPC(server int, term int) {
 		}	
 		rf.mu.Unlock()	
 		appendReplyArgs := &AppendEntriesReply{}
-		// DPrintf("[%v] is sending append rpc to %v", rf.me, server)
 		rf.sendAppendEntries(server, appendArgs, appendReplyArgs)
 
 		rf.mu.Lock()
@@ -331,8 +321,6 @@ type PersistedState struct {
 
 }
 func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example:
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	PersistedState := &PersistedState{
@@ -395,7 +383,6 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 	
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	// rf.timeout = resetTimer()
 	if rf.killed() || rf.votedFor != -1 {
 		return 
 	}
@@ -500,9 +487,6 @@ func (rf *Raft) applyCommand(leaderCommitIdx int, leaderPrevLogIndex int, entrie
 				CommandValid: true,
 				CommandIndex: applyIdx + 1,
 			}
-			if (applyIdx >= len(rf.log)) {
-				DPrintf("leader commit Idx is %v", leaderCommitIdx)
-			}
 			applyMsg.Command = rf.log[applyIdx].Command
 			rf.commitIndex = applyIdx
 			rf.applyCh <- applyMsg
@@ -546,7 +530,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			Command: command,
 		}
 		rf.log = append(rf.log, logEntry)
-		// DPrintf("[%v] Started receiving command %v and leaders log is now %v", rf.me, logEntry.Command, rf.log)
+		// DPrintf("[%v] Started receiving command %v and leaders log is currently %v", rf.me, logEntry.Command, rf.log)
 		rf.timeout = resetTimer()
 		rf.persist()
 		for server := range rf.peers {
@@ -589,7 +573,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.state = Follower
 	rf.lastApplied = -1
 	rf.commitIndex = -1
-	rf.readPersist(persister.ReadRaftState())
+	rf.readPersist(persister.ReadRaftState())  	// initialize from state persisted before a crash
 	rf.mu.Unlock()
 
 	go func() { 
@@ -605,7 +589,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		}
 	}()
 
-	// initialize from state persisted before a crash
 	return rf
 }
 
